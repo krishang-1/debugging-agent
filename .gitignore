@@ -1,0 +1,17 @@
+# Local Python environment
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets — GROQ_API_KEY belongs in the environment, never in the repo
+.env
+
+# Populated by BugsInPy checkouts inside the container, not source
+benchmark/bugsinpy_data/
+
+# Generated at runtime: agent traces and captured diffs
+logs/
+
+# Throwaway dev scripts, kept local
+_dev_*.py

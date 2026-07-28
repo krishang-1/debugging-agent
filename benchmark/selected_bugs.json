@@ -1,0 +1,29 @@
+[
+  {
+    "bug_id": "fastapi-1",
+    "project": "fastapi",
+    "bugsinpy_id": 1,
+    "category": "missing-feature",
+    "test_node": "tests/test_jsonable_encoder.py::test_encode_model_with_default",
+    "commit_message": "Implement response_model_exclude_defaults and response_model_exclude_none (#1166)",
+    "known_env_fixes": ["build_essential", "pytest_upgrade", "py_uninstall", "pydantic_pin_1_10_26", "aiofiles_upgrade"]
+  },
+  {
+    "bug_id": "fastapi-7",
+    "project": "fastapi",
+    "bugsinpy_id": 7,
+    "category": "serialization-edge-case",
+    "test_node": "tests/test_multi_body_errors.py::test_jsonable_encoder_requiring_error",
+    "commit_message": "Fix issue with exotic pydantic error serialization (#748)",
+    "known_env_fixes": ["pytest_upgrade", "py_uninstall", "pydantic_pin_1_10_26", "aiofiles_upgrade", "requests_urllib3_upgrade"]
+  },
+  {
+    "bug_id": "fastapi-12",
+    "project": "fastapi",
+    "bugsinpy_id": 12,
+    "category": "auth-security-behavior",
+    "test_node": "tests/test_security_http_bearer_optional.py::test_security_http_bearer_incorrect_scheme_credentials",
+    "commit_message": "Fix HTTP Bearer security auto-error (#282)",
+    "known_env_fixes": ["pytest_upgrade", "py_uninstall", "pydantic_pin_0_26", "setuptools_upgrade", "aiofiles_upgrade", "requests_urllib3_upgrade"]
+  }
+]

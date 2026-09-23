@@ -128,20 +128,45 @@ def run_one_bug(bug, call_model, call_llm, workdir_root: str = "/home/workspace/
     return _run_bugsinpy_bug(bug, call_model, call_llm, workdir_root)
 
 
+def _latest_results_path(results_dir: str) -> Path | None:
+    """Returns the most recently written results file in results_dir, or None if there isn't one yet."""
+    files = sorted(Path(results_dir).glob("run-*.json"))
+    return files[-1] if files else None
+
+
 def run_benchmark(call_model, call_llm, bugs_path: str = "benchmark/selected_bugs.json",
                   mutation_bugs_path: str = "benchmark/mutation_corpus/corpus/mutation_bugs.json",
-                  results_dir: str = "eval/results") -> list[BugOutcome]:
+                  results_dir: str = "eval/results", resume: bool = False) -> list[BugOutcome]:
     """Runs every bug in the benchmark — BugsInPy bugs plus mutation-testing bugs — writing the
     results file after EACH bug rather than only at the end — a crash or closed terminal partway
-    through then costs only the bug in progress, not every result that came before it. Each run
-    gets its own timestamped file, so successive runs accumulate rather than overwrite one
-    another."""
+    through then costs only the bug in progress, not every result that came before it. Each fresh
+    run gets its own timestamped file, so successive runs accumulate rather than overwrite one
+    another.
+
+    resume=True instead picks up the most recent results file in results_dir and keeps appending
+    to it: bugs already recorded there with a terminal outcome (anything but rate_limited) are
+    skipped rather than re-attempted, and rate_limited entries are dropped so those bugs get
+    retried. This is the intended way to work through the benchmark against a rate-limited key —
+    run a few bugs, let it stop on rate_limited, come back later with resume=True and it picks up
+    exactly where it left off instead of re-spending tokens on bugs already settled."""
     bugs = load_bugs(bugs_path) + load_mutation_bugs(mutation_bugs_path)
     Path(results_dir).mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    out_path = Path(results_dir) / f"run-{stamp}.json"
 
-    outcomes = []
+    outcomes: list[BugOutcome] = []
+    out_path = _latest_results_path(results_dir) if resume else None
+    if out_path is not None:
+        prior = [BugOutcome(**o) for o in json.loads(out_path.read_text(encoding="utf-8"))]
+        outcomes = [o for o in prior if o.outcome != "rate_limited"]
+        completed_ids = {o.bug_id for o in outcomes}
+        bugs = [b for b in bugs if b.bug_id not in completed_ids]
+    else:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        out_path = Path(results_dir) / f"run-{stamp}.json"
+
+    if not bugs:
+        print(f"nothing left to run — every bug already has a terminal outcome in {out_path}")
+        return outcomes
+
     for bug in bugs:
         print(f"[{bug.bug_id}] starting...")
         outcome = run_one_bug(bug, call_model, call_llm)
@@ -173,4 +198,4 @@ if __name__ == "__main__":
         )
         return response.choices[0].message.content
 
-    run_benchmark(llm_client.call_model, call_llm)
+    run_benchmark(llm_client.call_model, call_llm, resume="--resume" in sys.argv)

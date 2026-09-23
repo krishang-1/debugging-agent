@@ -10,8 +10,13 @@ __pycache__/
 # Populated by BugsInPy checkouts inside the container, not source
 benchmark/bugsinpy_data/
 
-# Generated at runtime: agent traces and captured diffs
+# Local working checkout mutation_harness.py applies/reverts patches against — a git clone,
+# not source; cloned fresh from tenacity's upstream repo, not this project's own history
+benchmark/mutation_corpus/tenacity_checkout/
+
+# Generated at runtime: agent traces, captured diffs, and benchmark result files
 logs/
+eval/results/
 
 # Throwaway dev scripts, kept local
 _dev_*.py

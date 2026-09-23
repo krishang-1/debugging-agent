@@ -1,0 +1,11 @@
+--- a/tenacity/_utils.py
++++ b/tenacity/_utils.py
+@@ -86,7 +86,7 @@
+ 
+     If no name can be produced ``repr(cb)`` is called and returned.
+     """
+-    segments = []
++    segments = None
+     try:
+         segments.append(cb.__qualname__)
+     except AttributeError:

@@ -1,0 +1,11 @@
+--- a/tenacity/retry.py
++++ b/tenacity/retry.py
+@@ -36,7 +36,7 @@
+             return other.__rand__(self)
+         # Plain callable: flatten if self is already a retry_all
+         if isinstance(self, retry_all):
+-            return retry_all(*self.retries, other)
++            return retry_all(*self.retries, None)
+         return retry_all(self, other)
+ 
+     def __rand__(self, other: "RetryBaseT") -> "retry_all":

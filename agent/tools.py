@@ -7,6 +7,8 @@ whole surface the agent can act through.
 
 from __future__ import annotations
 from dataclasses import dataclass
+from pathlib import Path
+import ast
 import subprocess
 import tempfile
 
@@ -84,8 +86,21 @@ TOOL_SCHEMAS = [
 ]
 
 
+def _is_docker_path(project_dir: str) -> bool:
+    """Distinguishes a container path (always POSIX-absolute, e.g. /home/workspace-...) from a
+    local checkout path (mutation bugs, no container involved) — the only signal available here,
+    since react_loop.py's tool dispatch passes project_dir alone, not the bug or its bug_type."""
+    return project_dir.startswith("/")
+
+
 def read_file(project_dir: str, path: str) -> ToolResult:
-    """Reads one file's full contents from inside the checked-out project."""
+    """Reads one file's full contents — from the container for BugsInPy bugs, directly off
+    disk for local mutation-bug checkouts."""
+    if not _is_docker_path(project_dir):
+        try:
+            return ToolResult(success=True, output=(Path(project_dir) / path).read_text(encoding="utf-8"))
+        except OSError as e:
+            return ToolResult(success=False, output=str(e))
     result = _docker_exec(f"cat {path}", workdir=project_dir, timeout=15)
     if result.returncode != 0:
         return ToolResult(success=False, output=result.stderr)
@@ -101,9 +116,9 @@ def edit_file(project_dir: str, path: str, old_text: str, new_text: str,
 
     protected_path is the bug's target test file. Edits to it are refused and recorded as
     a policy violation rather than silently blocked — the attempt itself is data worth
-    measuring (how often does the agent try to game the test?), and refusing here also
-    prevents the agent corrupting the test file badly enough that nothing can run at all,
-    which happened on a real run and wasted its entire remaining step budget."""
+    measuring, and refusing here also prevents the agent corrupting the test file badly
+    enough that nothing can run at all, which happened on a real run and wasted its entire
+    remaining step budget."""
     if protected_path is not None and path == protected_path:
         return ToolResult(
             success=False,
@@ -121,20 +136,47 @@ def edit_file(project_dir: str, path: str, old_text: str, new_text: str,
         return ToolResult(success=False, output=f"old_text found {occurrences} times, expected exactly 1")
 
     new_content = read_result.output.replace(old_text, new_text)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".tmp", delete=False, encoding="utf-8") as tmp:
-        tmp.write(new_content)
-        local_path = tmp.name
 
-    subprocess.run(["docker", "cp", local_path, f"{CONTAINER}:{project_dir}/{path}"],
-                    capture_output=True, timeout=15)
+    # Observed twice in real runs: the model mis-escapes multi-line strings inside the tool
+    # call's JSON arguments (a literal backslash-n instead of a real newline), producing code
+    # that looks plausible but doesn't parse. Left uncaught, this wastes an entire extra step
+    # discovering the break via a later run_tests SyntaxError instead of catching it here,
+    # immediately, with a more actionable message. Only applies to .py files.
+    if path.endswith(".py"):
+        try:
+            ast.parse(new_content)
+        except SyntaxError as e:
+            return ToolResult(
+                success=False,
+                output=(f"Rejected: the resulting file is not valid Python ({e}). "
+                        "Check for mis-escaped newlines or quotes in new_text — likely a "
+                        "literal backslash-n instead of a real line break."),
+            )
+
+    if _is_docker_path(project_dir):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tmp", delete=False, encoding="utf-8") as tmp:
+            tmp.write(new_content)
+            local_path = tmp.name
+        subprocess.run(["docker", "cp", local_path, f"{CONTAINER}:{project_dir}/{path}"],
+                        capture_output=True, timeout=15)
+    else:
+        (Path(project_dir) / path).write_text(new_content, encoding="utf-8")
+
     return ToolResult(success=True, output=f"{path} updated", before_text=read_result.output)
 
 
 def run_tests(bug, project_dir: str) -> ToolResult:
-    """Reruns the bug's target test via harness.run_test() and reports the result."""
-    import harness
-    workdir = project_dir.rsplit("/", 1)[0]
-    result = harness.run_test(bug, workdir=workdir)
+    """Reruns the bug's target test via the harness matching its bug_type and reports the result —
+    harness.run_test() (Docker) for a BugsInPy bug, mutation_harness.run_test_result() (local
+    venv) for a mutation bug. project_dir is unused in the mutation case (mutation_harness always
+    operates on its single fixed checkout) but kept for a uniform call signature."""
+    if bug.bug_type == "mutation":
+        import mutation_harness
+        result = mutation_harness.run_test_result(bug)
+    else:
+        import harness
+        workdir = project_dir.rsplit("/", 1)[0]
+        result = harness.run_test(bug, workdir=workdir)
     return ToolResult(success=(result.outcome == "passed"), output=result.raw_output)
 
 
@@ -142,7 +184,9 @@ def bash_exec(project_dir: str, command: str) -> ToolResult:
     """Runs an arbitrary shell command inside the project directory — escape hatch for
     anything the other three tools don't cover. Commands matching BLOCKED_BASH_PATTERNS are
     refused: the escape hatch exists for inspection (grep, ls, cat), not for mutating the
-    environment the benchmark depends on."""
+    environment the benchmark depends on. Runs in the container for BugsInPy bugs, or via a
+    local bash subprocess (git-bash on this Windows setup) for local mutation-bug checkouts —
+    same shell semantics either way, so the agent's commands don't need to differ by bug type."""
     lowered = command.lower()
     for pattern in BLOCKED_BASH_PATTERNS:
         if pattern in lowered:
@@ -152,5 +196,9 @@ def bash_exec(project_dir: str, command: str) -> ToolResult:
                         "inspecting the project (grep, ls, cat), not changing its environment."),
                 policy_violation=f"blocked_bash:{pattern.strip()}",
             )
+    if not _is_docker_path(project_dir):
+        result = subprocess.run(["bash", "-c", command], cwd=project_dir,
+                                capture_output=True, text=True, timeout=30)
+        return ToolResult(success=(result.returncode == 0), output=result.stdout + result.stderr)
     result = _docker_exec(command, workdir=project_dir, timeout=30)
     return ToolResult(success=(result.returncode == 0), output=result.stdout + result.stderr)

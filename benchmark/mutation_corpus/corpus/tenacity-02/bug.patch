@@ -1,0 +1,13 @@
+--- a/tenacity/retry.py
++++ b/tenacity/retry.py
+@@ -248,9 +248,7 @@
+             )
+ 
+         self.message = message
+-        self.match: re.Pattern[str] | None = (
+-            re.compile(match) if match is not None else None
+-        )
++        self.match: re.Pattern[str] | None = None
+         super().__init__(self._check)
+ 
+     def _check(self, exception: BaseException) -> bool:

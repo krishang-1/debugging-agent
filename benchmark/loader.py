@@ -16,6 +16,7 @@ class BugRecord:
     test_node: str
     commit_message: str
     known_env_fixes: list[str]
+    bug_type: str = "bugsinpy"
 
 
 def load_bugs(path: str | Path = "selected_bugs.json") -> list[BugRecord]:

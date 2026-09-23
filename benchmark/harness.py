@@ -76,7 +76,13 @@ def snapshot_exists(bug) -> bool:
 
 
 def save_snapshot(bug, workdir: str) -> bool:
-    """Archives a prepared checkout so it can be restored instead of rebuilt. setup_bug() costs
+    """Archives a prepared checkout so it can be restored instead of rebuilt.
+
+    IMPORTANT: a snapshot is only valid when restored to the exact same absolute path it was
+    taken from. Python venvs hardcode their own absolute path into every script's shebang and
+    into pyvenv.cfg, so a relocated venv fails with "cannot execute: required file not found"
+    on a file that visibly exists. restore_snapshot() therefore always extracts back to the
+    original workdir rather than allowing an arbitrary destination. setup_bug() costs
     ~44 minutes (measured), almost all network wait across 100+ individual pip calls, and must be
     repaid every time an agent run leaves a checkout dirty.
 
@@ -91,31 +97,49 @@ def save_snapshot(bug, workdir: str) -> bool:
 
 
 def restore_snapshot(bug, workdir: str) -> bool:
-    """Restores a prepared checkout from this bug's archive, replacing whatever state an earlier
-    agent run left behind. Returns False when no snapshot exists, so callers fall back to a full
-    setup_bug(). Extracts to a staging path and verifies the venv actually arrived before swapping
-    it into place — a failed restore leaves the existing checkout untouched rather than deleting
-    it first and discovering the problem afterwards."""
+    """Restores a prepared checkout from this bug's archive to `workdir`, replacing whatever
+    state an earlier agent run left behind. Returns False when no snapshot exists, so callers
+    fall back to a full setup_bug().
+
+    Order matters here in a way that isn't obvious: venv scripts hardcode an absolute path in
+    their shebang, so the rewrite must target the FINAL destination path — but that means the
+    rewritten files can't be executed to verify them until they actually live at that path.
+    Moving before verifying looks unsafe, so the existing checkout is renamed to a backup
+    (instant, same filesystem) rather than deleted, and only removed once the new one is
+    confirmed working at its real location. A failed verification restores the backup."""
     if not snapshot_exists(bug):
         return False
 
     staging = f"{workdir}-restoring"
-    _docker_exec(f"rm -rf {staging} && mkdir -p {staging}", workdir="/", timeout=120)
+    backup = f"{workdir}-backup"
+    _docker_exec(f"rm -rf {staging} {backup} && mkdir -p {staging}", workdir="/", timeout=120)
 
     extracted = _docker_exec(f"tar -xf {_snapshot_path(bug)} -C {staging}", workdir="/", timeout=900)
     if extracted.returncode != 0:
         _docker_exec(f"rm -rf {staging}", workdir="/", timeout=60)
         return False
 
-    check = _docker_exec(f"test -x {staging}/{bug.project}/env/bin/pip && echo OK",
-                         workdir="/", timeout=60)
-    if "OK" not in check.stdout:
-        _docker_exec(f"rm -rf {staging}", workdir="/", timeout=60)
+    venv_dir = f"{staging}/{bug.project}/env"
+    rewrite = (
+        f"find {venv_dir}/bin -maxdepth 1 -type f -exec "
+        f"sed -i 's|/home/workspace/[^/]*/{bug.project}/env|{workdir}/{bug.project}/env|g' {{}} + && "
+        f"sed -i 's|/home/workspace/[^/]*/{bug.project}/env|{workdir}/{bug.project}/env|g' {venv_dir}/pyvenv.cfg"
+    )
+    _docker_exec(rewrite, workdir="/", timeout=120)
+
+    # Move the (possibly nonexistent) current checkout aside rather than deleting it — the
+    # replacement isn't verified working yet.
+    _docker_exec(f"test -d {workdir} && mv {workdir} {backup} || true", workdir="/", timeout=60)
+    _docker_exec(f"mkdir -p {workdir} && mv {staging}/{bug.project} {workdir}/{bug.project} && rm -rf {staging}",
+                workdir="/", timeout=180)
+
+    check = _docker_exec(f"{workdir}/{bug.project}/env/bin/pip --version", workdir="/", timeout=30)
+    if check.returncode != 0:
+        _docker_exec(f"rm -rf {workdir}", workdir="/", timeout=60)
+        _docker_exec(f"test -d {backup} && mv {backup} {workdir} || true", workdir="/", timeout=60)
         return False
 
-    _docker_exec(f"rm -rf {workdir} && mkdir -p {workdir} && "
-                 f"mv {staging}/{bug.project} {workdir}/{bug.project} && rm -rf {staging}",
-                 workdir="/", timeout=180)
+    _docker_exec(f"rm -rf {backup}", workdir="/", timeout=60)
     return True
 
 

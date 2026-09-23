@@ -10,7 +10,7 @@ from groq import Groq
 import groq
 
 _client = Groq(timeout=90.0, max_retries=2)  # reads GROQ_API_KEY from the environment
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"  # llama-3.3-70b-versatile was removed from Groq's catalog; this is the largest tool-calling-capable model left on this key
 
 
 def call_model(messages: list[dict], tools: list[dict], system: str):

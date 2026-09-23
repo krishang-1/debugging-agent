@@ -1,0 +1,62 @@
+[
+  {
+    "bug_id": "tenacity-01",
+    "project": "tenacity",
+    "base_commit": "3e58094d3bc414975aad9eadf343a32bdb3b89b3",
+    "category": "logging-introspection-bug",
+    "target_file": "tenacity/_utils.py",
+    "target_symbol": "get_callback_name",
+    "test_node": "test_regression.py::test_get_callback_name_returns_qualified_name",
+    "description": "segments initialized to None instead of []; the subsequent .append() raises AttributeError, is silently swallowed, and the function falls back to repr(cb) for every callable instead of its qualified name.",
+    "patch_file": "tenacity-01/bug.patch",
+    "test_file": "tenacity-01/test_regression.py"
+  },
+  {
+    "bug_id": "tenacity-02",
+    "project": "tenacity",
+    "base_commit": "3e58094d3bc414975aad9eadf343a32bdb3b89b3",
+    "category": "silent-feature-drop",
+    "target_file": "tenacity/retry.py",
+    "target_symbol": "retry_if_exception_message.__init__",
+    "test_node": "test_regression.py::test_match_pattern_is_compiled_and_used",
+    "description": "self.match is hardcoded to None instead of compiling the user-supplied 'match' regex, so retry_if_exception_message(match=...) silently never matches anything.",
+    "patch_file": "tenacity-02/bug.patch",
+    "test_file": "tenacity-02/test_regression.py"
+  },
+  {
+    "bug_id": "tenacity-03",
+    "project": "tenacity",
+    "base_commit": "3e58094d3bc414975aad9eadf343a32bdb3b89b3",
+    "category": "composition-logic-bug",
+    "target_file": "tenacity/retry.py",
+    "target_symbol": "retry_base.__and__",
+    "test_node": "test_regression.py::test_and_with_plain_callable_keeps_operand",
+    "description": "When flattening a chained '&' where self is already a retry_all and other is a plain callable, the new condition is replaced with None instead of being appended, silently dropping it from the combined retry predicate.",
+    "patch_file": "tenacity-03/bug.patch",
+    "test_file": "tenacity-03/test_regression.py"
+  },
+  {
+    "bug_id": "tenacity-04",
+    "project": "tenacity",
+    "base_commit": "3e58094d3bc414975aad9eadf343a32bdb3b89b3",
+    "category": "init-attribute-bug",
+    "target_file": "tenacity/retry.py",
+    "target_symbol": "retry_if_not_exception_type.__init__",
+    "test_node": "test_regression.py::test_exception_types_stored_and_usable",
+    "description": "self.exception_types is hardcoded to None instead of storing the constructor argument, so any later isinstance(e, self.exception_types) check raises TypeError at retry time.",
+    "patch_file": "tenacity-04/bug.patch",
+    "test_file": "tenacity-04/test_regression.py"
+  },
+  {
+    "bug_id": "tenacity-05",
+    "project": "tenacity",
+    "base_commit": "3e58094d3bc414975aad9eadf343a32bdb3b89b3",
+    "category": "default-value-boundary-bug",
+    "target_file": "tenacity/wait.py",
+    "target_symbol": "wait_random.__init__",
+    "test_node": "test_regression.py::test_wait_random_default_min_is_zero",
+    "description": "The default value of 'min' changed from 0 to 1 second, so wait_random() called with no arguments now waits at least 1s between retries instead of allowing 0.",
+    "patch_file": "tenacity-05/bug.patch",
+    "test_file": "tenacity-05/test_regression.py"
+  }
+]

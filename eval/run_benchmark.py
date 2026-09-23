@@ -9,6 +9,7 @@ hide the single most interesting number this benchmark produces.
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 import json
+import re
 import subprocess
 import sys
 import time
@@ -38,6 +39,52 @@ class BugOutcome:
     changed_files: list[str]
     run_id: str
     notes: str = ""
+
+
+TPM_RETRY_LIMIT = 3
+TPM_RETRY_MARGIN = 0.5  # seconds added to Groq's own wait hint, cheap insurance against clock skew
+
+_RETRY_AFTER_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)(ms|s)\b")
+
+
+def _retry_after_seconds(message: str) -> float | None:
+    """Parses Groq's "Please try again in <Xms|Xs|XmY.Zs>" hint out of a 429's error text."""
+    match = _RETRY_AFTER_RE.search(message)
+    if not match:
+        return None
+    minutes, value, unit = match.groups()
+    seconds = float(value) / 1000 if unit == "ms" else float(value)
+    return seconds + (int(minutes) * 60 if minutes else 0)
+
+
+def _is_daily_limit(message: str) -> bool:
+    """True when a 429's error text names the per-day (TPD) cap rather than the per-minute
+    (TPM) one. Groq's error body only distinguishes the two in this free-text message, not in
+    a separate structured field (confirmed against real 429 bodies captured in a prior run,
+    e.g. "...on tokens per minute (TPM): ..." vs "...on tokens per day (TPD): ...")."""
+    return "tokens per day" in message.lower()
+
+
+def _with_rate_limit_retry(call_model, max_retries: int = TPM_RETRY_LIMIT):
+    """Wraps call_model so a per-minute (TPM) 429 is retried in place — sleeping for what
+    Groq's own error says to wait, plus a small safety margin — up to max_retries times before
+    giving up. A per-day (TPD) 429 is re-raised immediately: waiting out a daily cap mid-attempt
+    isn't worth it, and _attempt_and_verify's existing except clause already turns that into a
+    clean 'rate_limited' outcome that stops the run."""
+    def wrapped(*args, **kwargs):
+        attempt = 0
+        while True:
+            try:
+                return call_model(*args, **kwargs)
+            except groq.RateLimitError as e:
+                message = str(e)
+                if _is_daily_limit(message) or attempt >= max_retries:
+                    raise
+                attempt += 1
+                wait = (_retry_after_seconds(message) or 1.0) + TPM_RETRY_MARGIN
+                print(f"  TPM rate limit hit, retry {attempt}/{max_retries} in {wait:.1f}s...")
+                time.sleep(wait)
+    return wrapped
 
 
 def _setup_error(bug, notes: str) -> BugOutcome:
@@ -149,6 +196,7 @@ def run_benchmark(call_model, call_llm, bugs_path: str = "benchmark/selected_bug
     retried. This is the intended way to work through the benchmark against a rate-limited key —
     run a few bugs, let it stop on rate_limited, come back later with resume=True and it picks up
     exactly where it left off instead of re-spending tokens on bugs already settled."""
+    call_model = _with_rate_limit_retry(call_model)
     bugs = load_bugs(bugs_path) + load_mutation_bugs(mutation_bugs_path)
     Path(results_dir).mkdir(parents=True, exist_ok=True)
 

@@ -200,3 +200,56 @@ here was noticing the gap *before* generating more data that would need it, not 
 **Interview-quiz framing:** *"Your experiment's results table doesn't have a column
 for the one variable you're about to start varying. What's the cost of adding it now
 versus after you've already generated a week of data?"*
+
+---
+
+## 2026-09-24 — `fastapi-1.jsonl`'s dev-iteration noise: same contamination, same fix, applied a second time
+
+**Context:** An earlier entry this same session (the `logs/` contamination writeup,
+above) found and quarantined scripted fixture data mixed into the 5 `tenacity` log
+files — a since-deleted, never-committed dev script that called `react_loop.run_attempt`
+directly with a canned stub model, writing into the real `logs/` directory because
+`logger.log_step()`'s default `log_dir` was never overridden for anything outside a
+genuine benchmark run. That investigation had already separately flagged
+`fastapi-1.jsonl` as having "a much larger, messier dev-iteration history" with two
+other near-instant runs — noted, but explicitly left untouched at the time as
+out-of-scope for that pass.
+
+**This entry closes that loose end, using the same method rather than a fresh one.**
+The temptation with a second, similar-looking mess is to treat it as a new problem and
+re-derive an approach — the discipline here was recognizing it as the *same* problem
+and applying the *same* policy, not improvising a second standard.
+
+**Method (identical to the `tenacity` pass):** group `fastapi-1.jsonl`'s 207 lines by
+`run_id`, compute each run's wall-clock span (`max(timestamp) - min(timestamp)`) and
+per-step average. Real API calls — confirmed across every other run_id in this file,
+spanning 7 seconds to ~15 minutes — cannot complete in under a second; a script driving
+`react_loop.run_attempt` with a synchronous stub model can produce 12+ logged steps in
+a fraction of a second, since nothing is actually waiting on a network round trip.
+
+**Result:** two run_ids, `9a70a961` and `190f2554`, each 13 steps compressed into a
+**0.2-second total span** — physically impossible for real calls, against a next-lowest
+real span of 7 seconds (a >30x margin, no ambiguity). Content confirmed the diagnosis
+before anything was moved: both are the same "giving up" canned-response pattern as the
+`tenacity` contamination, and one is even self-documenting — its literal content is
+`"giving up, just checking harness plumbing"`, i.e. whoever wrote that throwaway script
+left a comment-via-fixture-text saying exactly what it was for.
+
+**Fix:** both run_ids moved to `logs/_quarantine/fastapi-1.jsonl` (moved, not deleted —
+same audit-trail policy as the `tenacity` quarantine). Cross-checked that
+`c758d730` — the run_id the real, current `eval/results/` file for `fastapi-1`
+actually references — is untouched in the cleaned log.
+
+**Why this matters — the general lesson:** when the same class of problem shows up
+twice, the second occurrence is a test of whether the first fix was actually a policy
+or just a one-off patch. Re-deriving a bespoke response the second time (delete
+instead of quarantine, a different detection heuristic, a different threshold) would
+have meant the project didn't actually have a rule for "what do we do about
+contaminated logs" — it had a rule for "what we did that one time." Applying the
+identical method and the identical remedy is what makes it a real policy, checkable
+and repeatable, rather than incident-specific cleanup.
+
+**Interview-quiz framing:** *"You already fixed a bug like this once, somewhere else
+in the codebase. A teammate finds what looks like the same class of bug in a different
+file. Do you fix it fresh, or check whether your original fix was actually a general
+rule? How do you tell the difference?"*

@@ -4,7 +4,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Secrets — GROQ_API_KEY belongs in the environment, never in the repo
+# Secrets — GEMINI_API_KEY belongs here, never in the repo
 .env
 
 # Populated by BugsInPy checkouts inside the container, not source

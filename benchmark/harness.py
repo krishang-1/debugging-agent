@@ -158,10 +158,21 @@ def setup_bug(bug, version: int, workdir: str, use_snapshot: bool = True) -> lis
 
     checkout_cmd = f"bugsinpy-checkout -p {bug.project} -v {version} -i {bug.bugsinpy_id} -w {workdir}"
     checkout_result = _docker_exec(checkout_cmd, workdir="/", timeout=120)
-    if "status=\"OK\"" not in checkout_result.stdout:
-        raise HarnessSetupError(f"checkout failed for {bug.bug_id}:\n{checkout_result.stdout}{checkout_result.stderr}")
-
     project_dir = f"{workdir}/{bug.project}"
+
+    # "status=\"OK\"" always appears in stdout regardless of whether the checkout actually
+    # succeeded — bugsinpy-checkout echoes it from the project's own project.info metadata
+    # near the start of the script, before the git clone that does the real work even runs.
+    # Observed for real: a git clone killed mid-transfer by the timeout wrapper (network
+    # disconnect) still printed that line, so a broken checkout silently proceeded into a
+    # doomed compile instead of failing fast here. Checking for the checked-out repo's own
+    # .git directory is the actual ground truth for "did the clone land."
+    git_check = _docker_exec(f"test -d {project_dir}/.git && echo OK", workdir="/", timeout=15)
+    if checkout_result.returncode != 0 or "OK" not in git_check.stdout:
+        raise HarnessSetupError(
+            f"checkout failed for {bug.bug_id} (exit {checkout_result.returncode}):\n"
+            f"{checkout_result.stdout}{checkout_result.stderr}")
+
     try:
         _docker_exec("bugsinpy-compile", workdir=project_dir, timeout=COMPILE_TIMEOUT)
     except subprocess.TimeoutExpired:

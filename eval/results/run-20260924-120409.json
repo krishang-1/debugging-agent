@@ -1,0 +1,96 @@
+[
+  {
+    "bug_id": "fastapi-1",
+    "category": "missing-feature",
+    "outcome": "failed",
+    "steps_taken": 12,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "c758d730",
+    "notes": ""
+  },
+  {
+    "bug_id": "fastapi-7",
+    "category": "serialization-edge-case",
+    "outcome": "failed",
+    "steps_taken": 12,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "ee1936c5",
+    "notes": ""
+  },
+  {
+    "bug_id": "fastapi-12",
+    "category": "auth-security-behavior",
+    "outcome": "failed",
+    "steps_taken": 12,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "07129c27",
+    "notes": ""
+  },
+  {
+    "bug_id": "tenacity-01",
+    "category": "logging-introspection-bug",
+    "outcome": "solved",
+    "steps_taken": 9,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/_utils.py"
+    ],
+    "run_id": "208fa394",
+    "notes": ""
+  },
+  {
+    "bug_id": "tenacity-02",
+    "category": "silent-feature-drop",
+    "outcome": "failed",
+    "steps_taken": 12,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "8a51fdc8",
+    "notes": ""
+  },
+  {
+    "bug_id": "tenacity-03",
+    "category": "composition-logic-bug",
+    "outcome": "failed",
+    "steps_taken": 12,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "d8b97be7",
+    "notes": ""
+  },
+  {
+    "bug_id": "tenacity-04",
+    "category": "init-attribute-bug",
+    "outcome": "solved",
+    "steps_taken": 11,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/retry.py"
+    ],
+    "run_id": "1a021758",
+    "notes": ""
+  },
+  {
+    "bug_id": "tenacity-05",
+    "category": "default-value-boundary-bug",
+    "outcome": "solved",
+    "steps_taken": 11,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/wait.py"
+    ],
+    "run_id": "931cd99b",
+    "notes": ""
+  }
+]

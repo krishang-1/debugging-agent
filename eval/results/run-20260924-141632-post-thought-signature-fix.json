@@ -1,0 +1,108 @@
+[
+  {
+    "bug_id": "fastapi-1",
+    "category": "missing-feature",
+    "outcome": "rate_limited",
+    "steps_taken": 0,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "",
+    "model": "gemini-3.5-flash",
+    "notes": "Re-run attempt post-thought_signature-fix (b8f8b39) blocked immediately by gemini-3.5-flash daily quota (20 RPD, confirmed live). Not re-verified \u2014 original pre-fix result (failed, flash-lite, 12 steps) is the last real data point for this bug."
+  },
+  {
+    "bug_id": "fastapi-7",
+    "category": "serialization-edge-case",
+    "outcome": "failed",
+    "steps_taken": 12,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "ee1936c5",
+    "notes": "PENDING RE-VERIFICATION: this is the original pre-thought_signature-fix (b8f8b39) result. Never re-attempted post-fix \u2014 the re-run session was blocked by gemini-3.5-flash hitting its 20 RPD daily quota on fastapi-1 before reaching this bug. Do not treat as current truth for whether this bug is solvable; re-run once quota is available.",
+    "model": "gemini-3.5-flash-lite"
+  },
+  {
+    "bug_id": "fastapi-12",
+    "category": "auth-security-behavior",
+    "outcome": "failed",
+    "steps_taken": 12,
+    "policy_violations": [],
+    "verifier_verdict": "not_run",
+    "changed_files": [],
+    "run_id": "07129c27",
+    "notes": "PENDING RE-VERIFICATION: this is the original pre-thought_signature-fix (b8f8b39) result. Never re-attempted post-fix \u2014 the re-run session was blocked by gemini-3.5-flash hitting its 20 RPD daily quota on fastapi-1 before reaching this bug. Do not treat as current truth for whether this bug is solvable; re-run once quota is available.",
+    "model": "gemini-3.5-flash-lite"
+  },
+  {
+    "bug_id": "tenacity-01",
+    "category": "logging-introspection-bug",
+    "outcome": "solved",
+    "steps_taken": 9,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/_utils.py"
+    ],
+    "run_id": "208fa394",
+    "notes": "",
+    "model": "gemini-3.5-flash-lite"
+  },
+  {
+    "bug_id": "tenacity-02",
+    "category": "silent-feature-drop",
+    "outcome": "solved",
+    "steps_taken": 6,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/retry.py"
+    ],
+    "run_id": "",
+    "model": "gemini-3.5-flash-lite",
+    "notes": "Re-run after thought_signature fix (b8f8b39). Original pre-fix attempt failed at 12 steps, burning roughly half its budget on the now-fixed history-corruption bug."
+  },
+  {
+    "bug_id": "tenacity-03",
+    "category": "composition-logic-bug",
+    "outcome": "solved",
+    "steps_taken": 7,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/retry.py"
+    ],
+    "run_id": "",
+    "model": "gemini-3.5-flash",
+    "notes": "Re-run after thought_signature fix (b8f8b39). Failed on flash-lite even post-fix (12 steps, never attempted an edit \u2014 real capability gap, not a harness bug). Solved on first retry with the stronger gemini-3.5-flash model on identical code."
+  },
+  {
+    "bug_id": "tenacity-04",
+    "category": "init-attribute-bug",
+    "outcome": "solved",
+    "steps_taken": 11,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/retry.py"
+    ],
+    "run_id": "1a021758",
+    "notes": "",
+    "model": "gemini-3.5-flash-lite"
+  },
+  {
+    "bug_id": "tenacity-05",
+    "category": "default-value-boundary-bug",
+    "outcome": "solved",
+    "steps_taken": 11,
+    "policy_violations": [],
+    "verifier_verdict": "genuine_fix",
+    "changed_files": [
+      "tenacity/wait.py"
+    ],
+    "run_id": "931cd99b",
+    "notes": "",
+    "model": "gemini-3.5-flash-lite"
+  }
+]

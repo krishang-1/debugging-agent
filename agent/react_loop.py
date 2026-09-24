@@ -113,11 +113,18 @@ def run_attempt(bug, project_dir: str, call_model, initial_test_output: str, max
 
         assistant_entry = {"role": "assistant", "content": message.content}
         if message.tool_calls:
-            assistant_entry["tool_calls"] = [
-                {"id": tc.id, "type": "function",
-                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                for tc in message.tool_calls
-            ]
+            assistant_entry["tool_calls"] = []
+            for tc in message.tool_calls:
+                entry = {"id": tc.id, "type": "function",
+                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                # Gemini rejects any later request whose history includes a function-call
+                # turn missing this field ("Function call is missing a thought_signature"),
+                # so it must round-trip through history exactly like it came in. Providers
+                # (and the test stub) that don't set it are unaffected — getattr just no-ops.
+                extra_content = getattr(tc, "extra_content", None)
+                if extra_content:
+                    entry["extra_content"] = extra_content
+                assistant_entry["tool_calls"].append(entry)
         messages.append(assistant_entry)
 
         if message.content:

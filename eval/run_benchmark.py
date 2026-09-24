@@ -37,6 +37,8 @@ class BugOutcome:
     verifier_verdict: str
     changed_files: list[str]
     run_id: str
+    model: str = ""  # which model produced this outcome — required once a results file might
+                     # ever mix models; a combined run without this is unreadable
     notes: str = ""
 
 
@@ -105,14 +107,15 @@ def _with_rate_limit_retry(call_model, max_retries: int = RPM_RETRY_LIMIT):
     return wrapped
 
 
-def _setup_error(bug, notes: str) -> BugOutcome:
+def _setup_error(bug, notes: str, model_name: str) -> BugOutcome:
     """Builds the outcome for a bug that never made it to an agent attempt at all."""
     return BugOutcome(bug_id=bug.bug_id, category=bug.category, outcome="setup_error",
                       steps_taken=0, policy_violations=[], verifier_verdict="not_run",
-                      changed_files=[], run_id="", notes=notes)
+                      changed_files=[], run_id="", model=model_name, notes=notes)
 
 
-def _attempt_and_verify(bug, project_dir: str, call_model, call_llm, initial_test_output: str) -> BugOutcome:
+def _attempt_and_verify(bug, project_dir: str, call_model, call_llm, initial_test_output: str,
+                        model_name: str) -> BugOutcome:
     """Runs one full agent attempt against an already-set-up checkout, then independently
     verifies the result — the part of run_one_bug that's identical regardless of which harness
     did the setup."""
@@ -121,7 +124,7 @@ def _attempt_and_verify(bug, project_dir: str, call_model, call_llm, initial_tes
     except openai.RateLimitError as e:
         return BugOutcome(bug_id=bug.bug_id, category=bug.category, outcome="rate_limited",
                           steps_taken=0, policy_violations=[], verifier_verdict="not_run",
-                          changed_files=[], run_id="", notes=str(e))
+                          changed_files=[], run_id="", model=model_name, notes=str(e))
 
     verdict = "not_run"
     if attempt.changed_files:
@@ -137,10 +140,10 @@ def _attempt_and_verify(bug, project_dir: str, call_model, call_llm, initial_tes
     return BugOutcome(bug_id=bug.bug_id, category=bug.category, outcome=outcome,
                       steps_taken=attempt.steps_taken, policy_violations=attempt.policy_violations,
                       verifier_verdict=verdict, changed_files=list(attempt.changed_files),
-                      run_id=attempt.run_id)
+                      run_id=attempt.run_id, model=model_name)
 
 
-def _run_bugsinpy_bug(bug, call_model, call_llm, workdir_root: str) -> BugOutcome:
+def _run_bugsinpy_bug(bug, call_model, call_llm, workdir_root: str, model_name: str) -> BugOutcome:
     """Sets up one BugsInPy bug fresh via the Docker harness, runs a full agent attempt against
     it, then independently verifies the result. setup_bug() restores from a per-bug snapshot
     when one exists (seconds), falling back to a full checkout+compile (~44 min, measured)
@@ -150,20 +153,20 @@ def _run_bugsinpy_bug(bug, call_model, call_llm, workdir_root: str) -> BugOutcom
     try:
         unrecognized = harness.setup_bug(bug, version=0, workdir=workdir)
     except harness.HarnessSetupError as e:
-        return _setup_error(bug, str(e))
+        return _setup_error(bug, str(e), model_name)
 
     initial = harness.run_test(bug, workdir=workdir)
     if initial.outcome != "failed":
-        return _setup_error(bug, f"bug did not reproduce cleanly: {initial.outcome}")
+        return _setup_error(bug, f"bug did not reproduce cleanly: {initial.outcome}", model_name)
 
     project_dir = f"{workdir}/{bug.project}"
-    outcome = _attempt_and_verify(bug, project_dir, call_model, call_llm, initial.raw_output)
+    outcome = _attempt_and_verify(bug, project_dir, call_model, call_llm, initial.raw_output, model_name)
     if unrecognized:
         outcome.notes = f"unrecognized env fixes: {unrecognized}"
     return outcome
 
 
-def _run_mutation_bug(bug, call_model, call_llm) -> BugOutcome:
+def _run_mutation_bug(bug, call_model, call_llm, model_name: str) -> BugOutcome:
     """Applies one mutation bug's patch to the shared local tenacity checkout, runs a full
     agent attempt against it, then independently verifies the result. No workdir or snapshot —
     mutation_harness operates on a single checkout that must be reverted after every attempt
@@ -171,26 +174,30 @@ def _run_mutation_bug(bug, call_model, call_llm) -> BugOutcome:
     try:
         mutation_harness.apply_bug(bug)
     except subprocess.CalledProcessError as e:
-        return _setup_error(bug, str(e))
+        return _setup_error(bug, str(e), model_name)
 
     try:
         initial = mutation_harness.run_test_result(bug)
         if initial.outcome != "failed":
-            return _setup_error(bug, f"bug did not reproduce cleanly: {initial.outcome}")
+            return _setup_error(bug, f"bug did not reproduce cleanly: {initial.outcome}", model_name)
 
         project_dir = str(mutation_harness.CHECKOUT.resolve())
-        return _attempt_and_verify(bug, project_dir, call_model, call_llm, initial.raw_output)
+        return _attempt_and_verify(bug, project_dir, call_model, call_llm, initial.raw_output, model_name)
     finally:
         mutation_harness.revert_bug(bug)
 
 
-def run_one_bug(bug, call_model, call_llm, workdir_root: str = "/home/workspace/bench") -> BugOutcome:
+def run_one_bug(bug, call_model, call_llm, model_name: str,
+                workdir_root: str = "/home/workspace/bench") -> BugOutcome:
     """Dispatches to the harness matching this bug's bug_type — harness.py (Docker) for
     'bugsinpy', mutation_harness.py (local checkout) for 'mutation' — so both bug types run
-    through the same benchmark loop and produce the same BugOutcome shape."""
+    through the same benchmark loop and produce the same BugOutcome shape. model_name is
+    stamped onto the outcome rather than inferred from call_model, since call_model is an
+    opaque injected callable with no identity of its own — required so a results file mixing
+    models (e.g. flash-lite for volume, flash for bugs it can't solve) stays interpretable."""
     if bug.bug_type == "mutation":
-        return _run_mutation_bug(bug, call_model, call_llm)
-    return _run_bugsinpy_bug(bug, call_model, call_llm, workdir_root)
+        return _run_mutation_bug(bug, call_model, call_llm, model_name)
+    return _run_bugsinpy_bug(bug, call_model, call_llm, workdir_root, model_name)
 
 
 def _latest_results_path(results_dir: str) -> Path | None:
@@ -199,7 +206,7 @@ def _latest_results_path(results_dir: str) -> Path | None:
     return files[-1] if files else None
 
 
-def run_benchmark(call_model, call_llm, bugs_path: str = "benchmark/selected_bugs.json",
+def run_benchmark(call_model, call_llm, model_name: str, bugs_path: str = "benchmark/selected_bugs.json",
                   mutation_bugs_path: str = "benchmark/mutation_corpus/corpus/mutation_bugs.json",
                   results_dir: str = "eval/results", resume: bool = False) -> list[BugOutcome]:
     """Runs every bug in the benchmark — BugsInPy bugs plus mutation-testing bugs — writing the
@@ -235,7 +242,7 @@ def run_benchmark(call_model, call_llm, bugs_path: str = "benchmark/selected_bug
 
     for bug in bugs:
         print(f"[{bug.bug_id}] starting...")
-        outcome = run_one_bug(bug, call_model, call_llm)
+        outcome = run_one_bug(bug, call_model, call_llm, model_name)
         print(f"[{bug.bug_id}] {outcome.outcome} in {outcome.steps_taken} steps")
         outcomes.append(outcome)
         out_path.write_text(json.dumps([asdict(o) for o in outcomes], indent=2), encoding="utf-8")
@@ -262,4 +269,4 @@ if __name__ == "__main__":
         )
         return response.choices[0].message.content
 
-    run_benchmark(llm_client.call_model, call_llm, resume="--resume" in sys.argv)
+    run_benchmark(llm_client.call_model, call_llm, llm_client.MODEL, resume="--resume" in sys.argv)

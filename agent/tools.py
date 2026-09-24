@@ -197,8 +197,17 @@ def bash_exec(project_dir: str, command: str) -> ToolResult:
                 policy_violation=f"blocked_bash:{pattern.strip()}",
             )
     if not _is_docker_path(project_dir):
-        result = subprocess.run(["bash", "-c", command], cwd=project_dir,
-                                capture_output=True, text=True, timeout=30)
+        # The Docker path below never raises on a slow command — _docker_exec wraps it with
+        # the container's own `timeout` utility, so the subprocess always exits on its own.
+        # This local path has no such wrapper, so subprocess.run's own timeout can fire for
+        # real (observed live: the agent ran `find / -name pytest`, an unbounded search from
+        # root, against a real mutation-bug checkout) — caught here and turned into a normal
+        # failed ToolResult instead of an uncaught exception that kills the whole benchmark run.
+        try:
+            result = subprocess.run(["bash", "-c", command], cwd=project_dir,
+                                    capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return ToolResult(success=False, output="Command timed out after 30s.")
         return ToolResult(success=(result.returncode == 0), output=result.stdout + result.stderr)
     result = _docker_exec(command, workdir=project_dir, timeout=30)
     return ToolResult(success=(result.returncode == 0), output=result.stdout + result.stderr)

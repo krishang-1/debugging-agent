@@ -4,9 +4,12 @@ happened to print to a terminal during the run.
 """
 
 import json
+import os
 import time
 import uuid
 from pathlib import Path
+
+DEFAULT_LOG_DIR = "logs"
 
 
 def new_run_id() -> str:
@@ -17,9 +20,21 @@ def new_run_id() -> str:
 
 
 def log_step(bug_id: str, step_number: int, role: str, content: str,
-             run_id: str = "unknown", log_dir: str = "logs") -> None:
+             run_id: str = "unknown", log_dir: str = DEFAULT_LOG_DIR) -> None:
     """Appends one JSONL record for a single step in an attempt. One file per bug, with
-    run_id distinguishing separate executions within it."""
+    run_id distinguishing separate executions within it.
+
+    Refuses to write to the real log_dir when called from inside a pytest run — a test that
+    exercises real logging (directly or via react_loop.run_attempt) must pass an explicit
+    scratch directory (tmp_path) instead. This is the exact failure that previously left
+    scripted fixture data mixed into logs/: something under test wrote through the default
+    path without anyone noticing."""
+    if log_dir == DEFAULT_LOG_DIR and "PYTEST_CURRENT_TEST" in os.environ:
+        raise RuntimeError(
+            "log_step() was called with the real log_dir from inside a test "
+            f"({os.environ['PYTEST_CURRENT_TEST']}). Pass an explicit log_dir "
+            "(e.g. tmp_path) instead of writing into the production logs/ folder."
+        )
     Path(log_dir).mkdir(exist_ok=True)
     record = {
         "bug_id": bug_id,

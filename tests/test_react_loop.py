@@ -31,10 +31,16 @@ def _tool_call(name, arguments: dict, id_="call_1"):
     return SimpleNamespace(id=id_, function=function)
 
 
-def test_agent_solves_immediately_against_already_fixed_code():
+def test_agent_solves_immediately_against_already_fixed_code(monkeypatch):
     """A scripted model that calls run_tests right away should succeed instantly, since
     PROJECT_DIR already points at fixed code — proves the loop's plumbing works end to end
-    without needing a real model or a real bug fix."""
+    without needing a real model or a real bug fix.
+
+    Stubs out logging entirely rather than letting it hit the real logs/ dir — log_step()
+    now refuses that under pytest anyway (see logger.py), and this test has nothing to gain
+    from real log output."""
+    monkeypatch.setattr(react_loop.logger_module, "log_step", lambda *a, **k: None)
+
     def stub_call_model(messages, tool_schemas, system):
         return _stub_response(
             content="PLAN: check if the test already passes before changing anything.",

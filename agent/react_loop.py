@@ -88,8 +88,9 @@ def _dispatch_tool(name: str, tool_input: dict, bug, project_dir: str) -> tools.
 def run_attempt(bug, project_dir: str, call_model, initial_test_output: str, max_steps: int = MAX_STEPS) -> AttemptResult:
     """Runs one full debugging attempt against an already-set-up checkout. call_model is
     injected (see llm_client.call_model for the real implementation) so this stays testable
-    with a stub, same discipline as verifier.py. Message/tool-call shapes here follow Groq's
-    OpenAI-compatible format: tool_calls carry JSON-string arguments (parsed per call), and
+    with a stub, same discipline as verifier.py. Message/tool-call shapes here follow the
+    OpenAI-compatible format llm_client.py's provider speaks (Gemini, previously Groq):
+    tool_calls carry JSON-string arguments (parsed per call), and
     each tool result is sent back as its own 'tool' role message, not a combined block."""
     run_id = logger_module.new_run_id()
     attempt_memory = memory_module.AttemptMemory()

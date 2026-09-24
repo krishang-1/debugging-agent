@@ -9,7 +9,6 @@ hide the single most interesting number this benchmark produces.
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 import json
-import re
 import subprocess
 import sys
 import time
@@ -24,7 +23,7 @@ import harness
 import mutation_harness
 import react_loop
 import verifier
-import groq
+import openai
 
 
 @dataclass
@@ -41,48 +40,67 @@ class BugOutcome:
     notes: str = ""
 
 
-TPM_RETRY_LIMIT = 3
-TPM_RETRY_MARGIN = 0.5  # seconds added to Groq's own wait hint, cheap insurance against clock skew
-
-_RETRY_AFTER_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)(ms|s)\b")
+RPM_RETRY_LIMIT = 3
+RPM_RETRY_MARGIN = 0.5  # seconds added to Gemini's own wait hint, cheap insurance against clock skew
 
 
-def _retry_after_seconds(message: str) -> float | None:
-    """Parses Groq's "Please try again in <Xms|Xs|XmY.Zs>" hint out of a 429's error text."""
-    match = _RETRY_AFTER_RE.search(message)
-    if not match:
-        return None
-    minutes, value, unit = match.groups()
-    seconds = float(value) / 1000 if unit == "ms" else float(value)
-    return seconds + (int(minutes) * 60 if minutes else 0)
+def _quota_violation(body) -> dict | None:
+    """Pulls the QuotaFailure violation out of a Gemini 429 body — body is e.body, a list
+    containing one {'error': {...}} dict. The violation's quotaId (e.g.
+    "GenerateRequestsPerMinutePerProjectPerModel-FreeTier") names which limit was hit and
+    quotaValue its size; both confirmed against a real 429 deliberately triggered against the
+    free tier (16 rapid calls against a 15 RPM cap)."""
+    try:
+        for detail in body[0]["error"]["details"]:
+            if detail.get("@type", "").endswith("QuotaFailure"):
+                return detail["violations"][0]
+    except (KeyError, IndexError, TypeError):
+        pass
+    return None
 
 
-def _is_daily_limit(message: str) -> bool:
-    """True when a 429's error text names the per-day (TPD) cap rather than the per-minute
-    (TPM) one. Groq's error body only distinguishes the two in this free-text message, not in
-    a separate structured field (confirmed against real 429 bodies captured in a prior run,
-    e.g. "...on tokens per minute (TPM): ..." vs "...on tokens per day (TPD): ...")."""
-    return "tokens per day" in message.lower()
+def _retry_delay_seconds(body) -> float | None:
+    """Pulls the RetryInfo.retryDelay out of a Gemini 429 body (e.g. "12s") — a structured
+    wait hint, confirmed against the same real 429 as _quota_violation."""
+    try:
+        for detail in body[0]["error"]["details"]:
+            if detail.get("@type", "").endswith("RetryInfo"):
+                return float(detail["retryDelay"].rstrip("s"))
+    except (KeyError, IndexError, TypeError, ValueError):
+        pass
+    return None
 
 
-def _with_rate_limit_retry(call_model, max_retries: int = TPM_RETRY_LIMIT):
-    """Wraps call_model so a per-minute (TPM) 429 is retried in place — sleeping for what
-    Groq's own error says to wait, plus a small safety margin — up to max_retries times before
-    giving up. A per-day (TPD) 429 is re-raised immediately: waiting out a daily cap mid-attempt
-    isn't worth it, and _attempt_and_verify's existing except clause already turns that into a
-    clean 'rate_limited' outcome that stops the run."""
+def _is_daily_limit(quota_id: str | None) -> bool:
+    """True when the exceeded quota is a per-day limit rather than per-minute. Google's quota
+    IDs follow a "...PerMinute..." / "...PerDay..." naming convention (confirmed here only for
+    the per-minute case — "GenerateRequestsPerMinutePerProjectPerModel-FreeTier" from a real
+    429 — since triggering the per-day form would burn the entire day's quota; the per-day
+    check is inferred from that same, well-established Google API quota-ID convention rather
+    than independently observed)."""
+    return bool(quota_id) and "perday" in quota_id.lower()
+
+
+def _with_rate_limit_retry(call_model, max_retries: int = RPM_RETRY_LIMIT):
+    """Wraps call_model so a per-minute (RPM) 429 is retried in place — sleeping for what
+    Gemini's own RetryInfo says to wait, plus a small safety margin — up to max_retries times
+    before giving up. A per-day 429 is re-raised immediately: waiting out a daily cap
+    mid-attempt isn't worth it, and _attempt_and_verify's existing except clause already turns
+    that into a clean 'rate_limited' outcome that stops the run. Also re-raises immediately
+    when the quota type can't be identified at all — safer to stop the run than guess."""
     def wrapped(*args, **kwargs):
         attempt = 0
         while True:
             try:
                 return call_model(*args, **kwargs)
-            except groq.RateLimitError as e:
-                message = str(e)
-                if _is_daily_limit(message) or attempt >= max_retries:
+            except openai.RateLimitError as e:
+                violation = _quota_violation(e.body)
+                quota_id = violation["quotaId"] if violation else None
+                if quota_id is None or _is_daily_limit(quota_id) or attempt >= max_retries:
                     raise
                 attempt += 1
-                wait = (_retry_after_seconds(message) or 1.0) + TPM_RETRY_MARGIN
-                print(f"  TPM rate limit hit, retry {attempt}/{max_retries} in {wait:.1f}s...")
+                wait = (_retry_delay_seconds(e.body) or 1.0) + RPM_RETRY_MARGIN
+                print(f"  RPM rate limit hit, retry {attempt}/{max_retries} in {wait:.1f}s...")
                 time.sleep(wait)
     return wrapped
 
@@ -100,7 +118,7 @@ def _attempt_and_verify(bug, project_dir: str, call_model, call_llm, initial_tes
     did the setup."""
     try:
         attempt = react_loop.run_attempt(bug, project_dir, call_model, initial_test_output)
-    except groq.RateLimitError as e:
+    except openai.RateLimitError as e:
         return BugOutcome(bug_id=bug.bug_id, category=bug.category, outcome="rate_limited",
                           steps_taken=0, policy_violations=[], verifier_verdict="not_run",
                           changed_files=[], run_id="", notes=str(e))
@@ -234,13 +252,11 @@ def run_benchmark(call_model, call_llm, bugs_path: str = "benchmark/selected_bug
 
 if __name__ == "__main__":
     import llm_client
-    from groq import Groq
-
-    _client = Groq()
 
     def call_llm(prompt: str) -> str:
-        """Plain-text call for the verifier's soft check — no tools, no schema, just judgment."""
-        response = _client.chat.completions.create(
+        """Plain-text call for the verifier's soft check — no tools, no schema, just judgment.
+        Reuses llm_client's already-configured client rather than building a second one."""
+        response = llm_client._client.chat.completions.create(
             model=llm_client.MODEL, max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )

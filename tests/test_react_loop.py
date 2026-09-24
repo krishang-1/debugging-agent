@@ -1,8 +1,9 @@
 """Smoke test for react_loop.py using a scripted stub model — no real API call, no fresh
 setup_bug() needed. Points at bug #1's already-fixed checkout, still sitting in the
 container from earlier manual verification, so the target test should pass immediately.
-Stub response shape matches Groq's OpenAI-compatible format (choices[0].message, tool_calls
-with JSON-string arguments), not Anthropic's content-block format from the earlier draft.
+Stub response shape matches the OpenAI-compatible format llm_client.py's provider speaks
+(choices[0].message, tool_calls with JSON-string arguments), not Anthropic's content-block
+format from the earlier draft.
 """
 
 import sys

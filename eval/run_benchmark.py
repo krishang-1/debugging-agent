@@ -31,7 +31,7 @@ class BugOutcome:
     """One bug's full result — enough to reconstruct what happened without re-running anything."""
     bug_id: str
     category: str
-    outcome: str  # "solved", "gamed", "failed", or "setup_error"
+    outcome: str  # "solved", "gamed", "failed", "setup_error", "rate_limited", or "unavailable"
     steps_taken: int
     policy_violations: list[str]
     verifier_verdict: str
@@ -44,6 +44,9 @@ class BugOutcome:
 
 RPM_RETRY_LIMIT = 3
 RPM_RETRY_MARGIN = 0.5  # seconds added to Gemini's own wait hint, cheap insurance against clock skew
+
+SERVER_ERROR_RETRY_LIMIT = 3
+SERVER_ERROR_BASE_DELAY = 5.0  # seconds; doubles each retry (5s, 10s, 20s)
 
 
 def _quota_violation(body) -> dict | None:
@@ -83,15 +86,33 @@ def _is_daily_limit(quota_id: str | None) -> bool:
     return bool(quota_id) and "perday" in quota_id.lower()
 
 
+def _is_transient_server_error(e: openai.InternalServerError) -> bool:
+    """True for a 503 the API's own body labels UNAVAILABLE — the generic "This model is
+    currently experiencing high demand" capacity blip, observed for real crashing a Phase 2
+    run. Unlike a 429, this body carries no structured retry hint (no RetryInfo/retryDelay),
+    so there's nothing to parse — just a status worth recognizing as transient. Anything else
+    isn't assumed transient and is re-raised immediately rather than guessed at."""
+    try:
+        return e.status_code == 503 and e.body[0]["error"].get("status") == "UNAVAILABLE"
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return False
+
+
 def _with_rate_limit_retry(call_model, max_retries: int = RPM_RETRY_LIMIT):
     """Wraps call_model so a per-minute (RPM) 429 is retried in place — sleeping for what
     Gemini's own RetryInfo says to wait, plus a small safety margin — up to max_retries times
     before giving up. A per-day 429 is re-raised immediately: waiting out a daily cap
     mid-attempt isn't worth it, and _attempt_and_verify's existing except clause already turns
     that into a clean 'rate_limited' outcome that stops the run. Also re-raises immediately
-    when the quota type can't be identified at all — safer to stop the run than guess."""
+    when the quota type can't be identified at all — safer to stop the run than guess.
+
+    A transient 503 ("high demand") is retried the same way, with its own increasing backoff
+    since there's no server-provided wait hint to use — SERVER_ERROR_BASE_DELAY, doubling each
+    attempt. Exhausting those retries re-raises, and _attempt_and_verify's except clause turns
+    that into a clean 'unavailable' outcome, same stop-the-run behavior as rate_limited."""
     def wrapped(*args, **kwargs):
         attempt = 0
+        server_error_attempt = 0
         while True:
             try:
                 return call_model(*args, **kwargs)
@@ -103,6 +124,14 @@ def _with_rate_limit_retry(call_model, max_retries: int = RPM_RETRY_LIMIT):
                 attempt += 1
                 wait = (_retry_delay_seconds(e.body) or 1.0) + RPM_RETRY_MARGIN
                 print(f"  RPM rate limit hit, retry {attempt}/{max_retries} in {wait:.1f}s...")
+                time.sleep(wait)
+            except openai.InternalServerError as e:
+                if not _is_transient_server_error(e) or server_error_attempt >= SERVER_ERROR_RETRY_LIMIT:
+                    raise
+                server_error_attempt += 1
+                wait = SERVER_ERROR_BASE_DELAY * (2 ** (server_error_attempt - 1))
+                print(f"  Server reports high demand (503), retry {server_error_attempt}/"
+                      f"{SERVER_ERROR_RETRY_LIMIT} in {wait:.1f}s...")
                 time.sleep(wait)
     return wrapped
 
@@ -123,6 +152,10 @@ def _attempt_and_verify(bug, project_dir: str, call_model, call_llm, initial_tes
         attempt = react_loop.run_attempt(bug, project_dir, call_model, initial_test_output)
     except openai.RateLimitError as e:
         return BugOutcome(bug_id=bug.bug_id, category=bug.category, outcome="rate_limited",
+                          steps_taken=0, policy_violations=[], verifier_verdict="not_run",
+                          changed_files=[], run_id="", model=model_name, notes=str(e))
+    except openai.InternalServerError as e:
+        return BugOutcome(bug_id=bug.bug_id, category=bug.category, outcome="unavailable",
                           steps_taken=0, policy_violations=[], verifier_verdict="not_run",
                           changed_files=[], run_id="", model=model_name, notes=str(e))
 
@@ -216,11 +249,12 @@ def run_benchmark(call_model, call_llm, model_name: str, bugs_path: str = "bench
     another.
 
     resume=True instead picks up the most recent results file in results_dir and keeps appending
-    to it: bugs already recorded there with a terminal outcome (anything but rate_limited) are
-    skipped rather than re-attempted, and rate_limited entries are dropped so those bugs get
-    retried. This is the intended way to work through the benchmark against a rate-limited key —
-    run a few bugs, let it stop on rate_limited, come back later with resume=True and it picks up
-    exactly where it left off instead of re-spending tokens on bugs already settled."""
+    to it: bugs already recorded there with a terminal outcome (anything but rate_limited or
+    unavailable) are skipped rather than re-attempted, and rate_limited/unavailable entries are
+    dropped so those bugs get retried. This is the intended way to work through the benchmark
+    against a rate-limited key or a transient outage — run a few bugs, let it stop cleanly, come
+    back later with resume=True and it picks up exactly where it left off instead of
+    re-spending tokens on bugs already settled."""
     call_model = _with_rate_limit_retry(call_model)
     bugs = load_bugs(bugs_path) + load_mutation_bugs(mutation_bugs_path)
     Path(results_dir).mkdir(parents=True, exist_ok=True)
@@ -229,7 +263,7 @@ def run_benchmark(call_model, call_llm, model_name: str, bugs_path: str = "bench
     out_path = _latest_results_path(results_dir) if resume else None
     if out_path is not None:
         prior = [BugOutcome(**o) for o in json.loads(out_path.read_text(encoding="utf-8"))]
-        outcomes = [o for o in prior if o.outcome != "rate_limited"]
+        outcomes = [o for o in prior if o.outcome not in ("rate_limited", "unavailable")]
         completed_ids = {o.bug_id for o in outcomes}
         bugs = [b for b in bugs if b.bug_id not in completed_ids]
     else:
@@ -247,8 +281,10 @@ def run_benchmark(call_model, call_llm, model_name: str, bugs_path: str = "bench
         outcomes.append(outcome)
         out_path.write_text(json.dumps([asdict(o) for o in outcomes], indent=2), encoding="utf-8")
 
-        if outcome.outcome == "rate_limited":
-            print(f"[{bug.bug_id}] hit the daily token limit — stopping here rather than "
+        if outcome.outcome in ("rate_limited", "unavailable"):
+            reason = "hit the daily token limit" if outcome.outcome == "rate_limited" \
+                else "the API reported sustained high demand"
+            print(f"[{bug.bug_id}] {reason} — stopping here rather than "
                   f"burning through remaining bugs against a dead API. "
                   f"{len(bugs) - len(outcomes)} bug(s) not attempted this run.")
             break
